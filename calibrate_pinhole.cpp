@@ -10,10 +10,10 @@
 using namespace std;
 using namespace cv;
 
-vector< vector< Point3d > > object_points;
+vector< vector< Point3f > > object_points;
 vector< vector< Point2f > > imagePoints1, imagePoints2;
 vector< Point2f > corners1, corners2;
-vector< vector< Point2d > > left_img_points, right_img_points;
+vector< vector< Point2f > > left_img_points, right_img_points;
 
 Mat img1, img2, gray1, gray2, spl1, spl2;
 
@@ -29,7 +29,6 @@ void load_image_points(int board_width, int board_height, float square_size, int
     sprintf(left_img, "%s%s00%s.jpg", img_dir, leftimg_filename, (i<10?"0"+to_string(i):to_string(i)).c_str());
     sprintf(right_img, "%s%s00%s.jpg", img_dir, rightimg_filename, (i<10?"0"+to_string(i):to_string(i)).c_str());
     std::cout<<left_img<<std::endl;
-    std::cout<<right_img<<std::endl;
     img1 = imread(left_img, IMREAD_COLOR);
     img2 = imread(right_img, IMREAD_COLOR);
     cv::cvtColor(img1, gray1, COLOR_BGR2GRAY);
@@ -46,7 +45,7 @@ void load_image_points(int board_width, int board_height, float square_size, int
         cv::TermCriteria(CV_TERMCRIT_EPS | CV_TERMCRIT_ITER, 30, 0.1));
       cv::drawChessboardCorners(gray1, board_size, corners1, found1);
       // cv::imshow("corners 1",gray1);
-      // cv::waitKey(10000);
+      // cv::imshow();
     }
     if (found2)
     {
@@ -57,10 +56,10 @@ void load_image_points(int board_width, int board_height, float square_size, int
       // cv::waitKey(10000);
     }
 
-    vector<cv::Point3d> obj;
+    vector<cv::Point3f> obj;
     for( int i = 0; i < board_height; ++i )
       for( int j = 0; j < board_width; ++j )
-        obj.push_back(Point3d(double( (float)j * square_size ), double( (float)i * square_size ), 0));
+        obj.push_back(Point3f( (float)j * square_size, (float)i * square_size, 0));
 
     if (found1 && found2) {
       cout << i << ". Found corners!" << endl;
@@ -72,10 +71,10 @@ void load_image_points(int board_width, int board_height, float square_size, int
     }
   }
   for (int i = 0; i < imagePoints1.size(); i++) {
-    vector< Point2d > v1, v2;
+    vector< Point2f > v1, v2;
     for (int j = 0; j < imagePoints1[i].size(); j++) {
-      v1.push_back(Point2d((double)imagePoints1[i][j].x, (double)imagePoints1[i][j].y));
-      v2.push_back(Point2d((double)imagePoints2[i][j].x, (double)imagePoints2[i][j].y));
+      v1.push_back(Point2f(imagePoints1[i][j].x, imagePoints1[i][j].y));
+      v2.push_back(Point2f(imagePoints2[i][j].x, imagePoints2[i][j].y));
     }
     left_img_points.push_back(v1);
     right_img_points.push_back(v2);
@@ -111,9 +110,17 @@ int main(int argc, char const *argv[])
   load_image_points(board_width, board_height, square_size, num_imgs, img_dir, leftimg_filename, rightimg_filename);
 
   printf("Starting Calibration\n");
-  cv::Matx33d K1, K2, R;
+  cv::Mat K1, K2, R, E, F;
   cv::Vec3d T;
-  cv::Vec4d D1, D2;
+  cv::Mat D1, D2;
+  vector<Mat> rvecs, tvecs;
+  vector<float> reprojErrs;
+  double totalAvgErr = 0;
+  // vector<Point3f> newObjPoints;
+  K1 = Mat::eye(3, 3, CV_64F);
+  K2 = Mat::eye(3, 3, CV_64F);
+  D1 = Mat::zeros(8, 1, CV_64F);
+  D2 = Mat::zeros(8, 1, CV_64F);
   int flag = 0;
   flag |= cv::fisheye::CALIB_RECOMPUTE_EXTRINSIC;
   flag |= cv::fisheye::CALIB_CHECK_COND;
@@ -122,11 +129,11 @@ int main(int argc, char const *argv[])
   //flag |= cv::fisheye::CALIB_FIX_K2;
   //flag |= cv::fisheye::CALIB_FIX_K3;
   //flag |= cv::fisheye::CALIB_FIX_K4;
-  // double rms = cv::stereoCalibrate(object_points, left_img_points, right_img_points,
-  //     K1, D1, K2, D2, img1.size(), R, T, E, F, CALIB_FIX_ASPECT_RATIO +CALIB_SAME_FOCAL_LENGTH + CALIB_FIX_PRINCIPAL_POINT+ CALIB_RATIONAL_MODEL + CALIB_FIX_K4 + CALIB_FIX_K5);
-  double rms = cv::fisheye::stereoCalibrate(object_points, left_img_points, right_img_points,
-      K1, D1, K2, D2, img1.size(), R, T, flag,
-      cv::TermCriteria(3, 12, 0));
+  double rms = cv::stereoCalibrate(object_points, left_img_points, right_img_points,
+      K1, D1, K2, D2, img1.size(), R, T, E, F, CALIB_FIX_PRINCIPAL_POINT+ CALIB_RATIONAL_MODEL + CALIB_FIX_K4 + CALIB_FIX_K5+ CALIB_FIX_K6);
+  // double rms = cv::fisheye::stereoCalibrate(object_points, left_img_points, right_img_points,
+  //     K1, D1, K2, D2, img1.size(), R, T, flag,
+  //     cv::TermCriteria(3, 12, 0));
   cout << "done with RMS error=" << rms << endl;
   cv::FileStorage fs1(out_file, cv::FileStorage::WRITE);
   fs1 << "K1" << Mat(K1);
@@ -140,8 +147,8 @@ int main(int argc, char const *argv[])
   printf("Starting Rectification\n");
 
   cv::Mat R1, R2, P1, P2, Q;
-  cv::fisheye::stereoRectify(K1, D1, K2, D2, img1.size(), R, T, R1, R2, P1, P2, 
-    Q, CALIB_ZERO_DISPARITY, img1.size(), 0.0, 1.1);
+  cv::stereoRectify(K1, D1, K2, D2, img1.size(), R, T, R1, R2, P1, P2, 
+    Q);
   // cv::stereoRectify(K1, D1, K2, D2, img1.size(), R, T, R1, R2, P1, P2,
   //   Q, CALIB_ZERO_DISPARITY);
 
